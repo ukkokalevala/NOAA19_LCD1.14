@@ -1,0 +1,128 @@
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_ST7789.h>
+#include <ESP8266WiFi.h>
+#include <WiFiClientSecure.h>
+#include <ESP8266HTTPClient.h>
+#include <ArduinoJson.h>
+#include "secrets.h"
+
+// Pin definitions for Wemos D1
+#define TFT_CS    D2  // Chip select
+#define TFT_RST   D4  // Reset
+#define TFT_DC    D3  // Data/command control
+#define TFT_BL    D1  // Backlight
+
+Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
+
+// Wi-Fi credentials
+//const char* ssid = "yourSSID";        
+//const char* password = "yourPASSWORD"; 
+
+// N2YO API
+String apiKey = " your api key here "; // put your api key here 
+String satID = "33591";  // NOAA-19 Satellite ID
+
+// Cape Town coordinates
+const float myLat = -33.9249;
+const float myLon = 18.4241;
+
+void setup() {
+  Serial.begin(115200);
+  
+  // Initialize LCD
+  tft.init(135, 240);
+  tft.setRotation(3);
+  tft.fillScreen(ST77XX_BLACK);
+  tft.setTextSize(2);
+  tft.setTextColor(ST77XX_WHITE);
+  
+  tft.setCursor(0, 0);
+  tft.println("NOAA-19 Tracker");
+  delay(2000);
+
+  // Connect to Wi-Fi
+  Serial.println("Connecting to WiFi...");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+  Serial.println("Connected to WiFi");
+
+  fetchNOAA19Data();
+}
+
+void fetchNOAA19Data() {
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClientSecure client;
+    client.setInsecure();
+
+    HTTPClient http;
+
+    // API URL
+    String url = "https://api.n2yo.com/rest/v1/satellite/positions/" + satID + "/" + String(myLat) + "/" + String(myLon) + "/0/1/&apiKey=" + apiKey;
+
+    http.begin(client, url);
+    int httpResponseCode = http.GET();
+    
+    if (httpResponseCode > 0) {
+      String payload = http.getString();
+      Serial.println("HTTP Response Code: " + String(httpResponseCode));
+      Serial.println("Received Data: " + payload);
+      
+      // Parse JSON response
+      StaticJsonDocument<1024> doc;
+      DeserializationError error = deserializeJson(doc, payload);
+      
+      if (!error) {
+        float satLatitude = doc["positions"][0]["satlatitude"];
+        float satLongitude = doc["positions"][0]["satlongitude"];
+        
+        // Calculate distance to NOAA-19
+        float distance = calculateDistance(myLat, myLon, satLatitude, satLongitude);
+        
+        // Display NOAA-19 data
+        tft.fillScreen(ST77XX_BLACK);
+        tft.setCursor(0, 0);
+        tft.println("NOAA-19 Tracker");
+
+        tft.setCursor(0, 40);
+        tft.print("Lat: ");
+        tft.println(satLatitude, 4);
+
+        tft.setCursor(0, 80);
+        tft.print("Lon: ");
+        tft.println(satLongitude, 4);
+
+        tft.setCursor(0, 120);
+        tft.print("Dist: ");
+        tft.print(distance, 1);
+        tft.println(" km");
+        
+      } else {
+        Serial.println("JSON Parsing failed");
+      }
+    } else {
+      Serial.print("Error on HTTP request: ");
+      Serial.println(httpResponseCode);
+    }
+    http.end();
+  }
+}
+
+// Calculate distance between coordinates in km
+float calculateDistance(float lat1, float lon1, float lat2, float lon2) {
+  const float R = 6371.0;
+  float dLat = radians(lat2 - lat1);
+  float dLon = radians(lon2 - lon1);
+  float a = sin(dLat / 2) * sin(dLat / 2) + cos(radians(lat1)) * cos(radians(lat2)) * sin(dLon / 2) * sin(dLon / 2);
+  float c = 2 * atan2(sqrt(a), sqrt(1 - a));
+  float distance = R * c;
+  return distance;
+}
+
+void loop() {
+  delay(10000);
+  fetchNOAA19Data();
+}
